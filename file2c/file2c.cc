@@ -7,7 +7,7 @@
 #include <cassert>
 
 const char *inputFileName = nullptr, *outputFileName = nullptr;
-const char *varName = nullptr;
+const char *varName = nullptr, *prefixes = nullptr;
 std::unordered_set<std::string> includeFilePaths;
 size_t chunkSize = 4096;
 
@@ -79,7 +79,20 @@ int main(int argc, char *argv[]) {
             }
 
             chunkSize = chunkSizeIn;
-        } else {
+		} else if (!strcmp(curArg, "-p")) {
+			const char *prefixesStr = _requireArg(argc, argv, i);
+			if (!prefixesStr) {
+				_printError("-p requires a prefixes string");
+				return -1;
+			}
+
+			if (prefixes) {
+				_printError("Prefixes string is already specified");
+				return -1;
+			}
+
+			prefixes = prefixesStr;
+		} else {
             if(inputFileName) {
                 _printError("Input file name is already set");
                 return -1;
@@ -120,22 +133,44 @@ int main(int argc, char *argv[]) {
         os << "#include " << i << std::endl;
     }
 
+	if (prefixes)
+		os << prefixes << " ";
+
     os << "const char " << varName << "[] = \"";
 
-    size_t totalFileSize = 0;
+	size_t totalFileSize;
+	{
+		is.seekg(0, std::ios::end);
+		std::streampos streamOff = is.tellg();
+		is.seekg(0, std::ios::beg);
+
+		if (streamOff < 0) {
+			_printError("Error evaluating the file size");
+			return -1;
+		}
+
+		totalFileSize = (size_t)streamOff;
+	}
+
+    size_t totalSizeWritten = 0;
     {
         std::unique_ptr<char[]> chunk = std::make_unique<char[]>(chunkSize);
 
         char byteBuf[] = "\\x00";
 
-        while(true) {
-            std::streamsize szRead = is.readsome(chunk.get(), chunkSize);
-            totalFileSize += szRead;
+        while (totalSizeWritten < totalFileSize) {
+			std::streamsize szRead;
 
-            if(is.fail() || is.bad()) {
-                _printError("Error reading the input file");
-                return -1;
-            }
+			is.read(chunk.get(), chunkSize);
+			szRead = is.gcount();
+            totalSizeWritten += szRead;
+
+			if (!is.eof()) {
+				if (is.fail() || is.bad()) {
+					_printError("Error reading the input file");
+					return -1;
+				}
+			}
 
             for(size_t i = 0 ; i < (size_t)szRead; ++i) {
                 uint8_t curByte = *(uint8_t*)(chunk.get() + i);
@@ -146,18 +181,18 @@ int main(int argc, char *argv[]) {
             }
             
             if(os.fail() || os.bad()) {
-                _printError("Error reading the output file");
+                _printError("Error writing the output file");
                 return -1;
             }
-
-            if((size_t)szRead < chunkSize)
-                break;
         }
     }
 
     os << "\";" << std::endl;
 
-    os << "size_t " << varName << "_length = " << totalFileSize << ";" << std::endl;
+	if (prefixes)
+		os << prefixes << " ";
+
+    os << "const size_t " << varName << "_length = " << totalSizeWritten << ";" << std::endl;
 
     is.close();
     os.close();
